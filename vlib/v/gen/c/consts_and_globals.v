@@ -652,8 +652,14 @@ fn (mut g Gen) is_c_static_init_safe(expr ast.Expr) bool {
 					if expr.init_fields.any(it.name == field.name) {
 						continue
 					}
-					if !g.is_c_type_zero_init_safe(field.typ) {
-						return false
+					if field.has_default_expr {
+						if !g.is_c_static_init_safe(field.default_expr) {
+							return false
+						}
+					} else {
+						if !g.is_c_type_zero_init_safe(field.typ) {
+							return false
+						}
 					}
 				}
 			}
