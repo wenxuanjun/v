@@ -108,6 +108,14 @@ fn (mut g Gen) const_decl(node ast.ConstDecl) {
 					// "Simple" expressions are not going to need multiple statements,
 					// only the ones which are inited later, so it's safe to use expr_string
 					g.const_decl_simple_define(field.mod, field.name, const_name, g.expr_string(field_expr))
+				} else if g.is_c_init_safe_const(field_expr) {
+					styp := g.styp(field.typ)
+					val := g.expr_string(field_expr)
+					g.global_const_defs[name] = GlobalConstDef{
+						mod:       field.mod
+						def:       '${g.static_non_parallel}${styp} ${const_name} = ${val}; // simple type const'
+						dep_names: g.table.dependent_names_in_expr(field_expr)
+					}
 				} else if field.expr is ast.CastExpr {
 					if field.expr.expr is ast.ArrayInit {
 						if field.expr.expr.is_fixed && g.pref.build_mode != .build_module {
@@ -568,6 +576,128 @@ fn (mut g Gen) sort_globals_consts() {
 			if node.value == order {
 				g.sorted_global_const_names << node.name
 			}
+		}
+	}
+}
+
+fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
+	match expr {
+		ast.BoolLiteral, ast.CharLiteral, ast.IntegerLiteral, ast.FloatLiteral, ast.EnumVal,
+		ast.Nil, ast.None, ast.SizeOf, ast.OffsetOf, ast.TypeNode {
+			return true
+		}
+		ast.Ident {
+			if expr.obj.typ == 0 {
+				return false
+			}
+			sym := g.table.sym(expr.obj.typ)
+			return sym.kind == .function
+		}
+		ast.SelectorExpr {
+			if expr.typ == 0 {
+				return false
+			}
+			sym := g.table.sym(expr.typ)
+			return sym.kind == .function
+		}
+		ast.StringLiteral {
+			return expr.language == .c
+		}
+		ast.CastExpr {
+			if expr.typ == 0 {
+				return false
+			}
+			sym := g.table.sym(expr.typ)
+			if sym.kind == .interface || sym.kind == .sum_type {
+				return false
+			}
+			return g.is_c_init_safe_const(expr.expr)
+		}
+		ast.ParExpr, ast.UnsafeExpr {
+			return g.is_c_init_safe_const(expr.expr)
+		}
+		ast.PrefixExpr {
+			if expr.op == .amp {
+				if expr.right is ast.StructInit {
+					return false
+				}
+				if expr.right is ast.Ident || expr.right is ast.SelectorExpr {
+					return true
+				}
+			}
+			return g.is_c_init_safe_const(expr.right)
+		}
+		ast.StructInit {
+			if expr.update_expr !is ast.EmptyExpr {
+				return false
+			}
+			for field in expr.init_fields {
+				if !g.is_c_init_safe_const(field.expr) {
+					return false
+				}
+			}
+			if expr.typ == 0 {
+				return false
+			}
+			sym := g.table.final_sym(expr.typ)
+			if sym.info is ast.Struct {
+				for field in sym.info.fields {
+					if expr.init_fields.any(it.name == field.name) {
+						continue
+					}
+					if !g.is_c_init_safe_zero(field.typ) {
+						return false
+					}
+				}
+			}
+			return true
+		}
+		ast.ArrayInit {
+			return expr.is_fixed && expr.exprs.all(g.is_c_init_safe_const(it))
+		}
+		ast.InfixExpr {
+			return expr.left_type != ast.string_type && g.is_c_init_safe_const(expr.left)
+				&& g.is_c_init_safe_const(expr.right)
+		}
+		else {
+			return false
+		}
+	}
+}
+
+fn (mut g Gen) is_c_init_safe_zero(typ ast.Type) bool {
+	if typ == 0 {
+		return false
+	}
+	if typ.is_ptr() {
+		return true
+	}
+	sym := g.table.final_sym(typ)
+	if sym.is_number() || sym.is_bool() {
+		return true
+	}
+	if sym.is_pointer() || sym.is_number() || sym.is_bool() {
+		return true
+	}
+	match sym.kind {
+		.void, .enum, .function {
+			return true
+		}
+		.array_fixed {
+			info := sym.info as ast.ArrayFixed
+			return g.is_c_init_safe_zero(info.elem_type)
+		}
+		.struct {
+			info := sym.info as ast.Struct
+			for field in info.fields {
+				if !g.is_c_init_safe_zero(field.typ) {
+					return false
+				}
+			}
+			return true
+		}
+		else {
+			return false
 		}
 	}
 }
