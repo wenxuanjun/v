@@ -108,7 +108,7 @@ fn (mut g Gen) const_decl(node ast.ConstDecl) {
 					// "Simple" expressions are not going to need multiple statements,
 					// only the ones which are inited later, so it's safe to use expr_string
 					g.const_decl_simple_define(field.mod, field.name, const_name, g.expr_string(field_expr))
-				} else if g.is_c_init_safe_const(field_expr) {
+				} else if g.is_c_static_init_safe(field_expr) {
 					styp := g.styp(field.typ)
 					val := g.expr_string(field_expr)
 					g.global_const_defs[name] = GlobalConstDef{
@@ -580,7 +580,7 @@ fn (mut g Gen) sort_globals_consts() {
 	}
 }
 
-fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
+fn (mut g Gen) is_c_static_init_safe(expr ast.Expr) bool {
 	match expr {
 		ast.BoolLiteral, ast.CharLiteral, ast.IntegerLiteral, ast.FloatLiteral, ast.EnumVal,
 		ast.Nil, ast.None, ast.SizeOf, ast.OffsetOf, ast.TypeNode {
@@ -607,14 +607,17 @@ fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
 			if expr.typ == 0 {
 				return false
 			}
+			if expr.typ.has_flag(.option) || expr.typ.has_flag(.result) {
+				return false
+			}
 			sym := g.table.sym(expr.typ)
 			if sym.kind == .interface || sym.kind == .sum_type {
 				return false
 			}
-			return g.is_c_init_safe_const(expr.expr)
+			return g.is_c_static_init_safe(expr.expr)
 		}
 		ast.ParExpr, ast.UnsafeExpr {
-			return g.is_c_init_safe_const(expr.expr)
+			return g.is_c_static_init_safe(expr.expr)
 		}
 		ast.PrefixExpr {
 			if expr.op == .amp {
@@ -625,14 +628,14 @@ fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
 					return true
 				}
 			}
-			return g.is_c_init_safe_const(expr.right)
+			return g.is_c_static_init_safe(expr.right)
 		}
 		ast.StructInit {
 			if expr.update_expr !is ast.EmptyExpr {
 				return false
 			}
 			for field in expr.init_fields {
-				if !g.is_c_init_safe_const(field.expr) {
+				if !g.is_c_static_init_safe(field.expr) {
 					return false
 				}
 			}
@@ -645,7 +648,7 @@ fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
 					if expr.init_fields.any(it.name == field.name) {
 						continue
 					}
-					if !g.is_c_init_safe_zero(field.typ) {
+					if !g.is_c_type_zero_init_safe(field.typ) {
 						return false
 					}
 				}
@@ -653,11 +656,11 @@ fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
 			return true
 		}
 		ast.ArrayInit {
-			return expr.is_fixed && expr.exprs.all(g.is_c_init_safe_const(it))
+			return expr.is_fixed && expr.exprs.all(g.is_c_static_init_safe(it))
 		}
 		ast.InfixExpr {
-			return expr.left_type != ast.string_type && g.is_c_init_safe_const(expr.left)
-				&& g.is_c_init_safe_const(expr.right)
+			return expr.left_type != ast.string_type && g.is_c_static_init_safe(expr.left)
+				&& g.is_c_static_init_safe(expr.right)
 		}
 		else {
 			return false
@@ -665,7 +668,7 @@ fn (mut g Gen) is_c_init_safe_const(expr ast.Expr) bool {
 	}
 }
 
-fn (mut g Gen) is_c_init_safe_zero(typ ast.Type) bool {
+fn (mut g Gen) is_c_type_zero_init_safe(typ ast.Type) bool {
 	if typ == 0 {
 		return false
 	}
@@ -685,12 +688,12 @@ fn (mut g Gen) is_c_init_safe_zero(typ ast.Type) bool {
 		}
 		.array_fixed {
 			info := sym.info as ast.ArrayFixed
-			return g.is_c_init_safe_zero(info.elem_type)
+			return g.is_c_type_zero_init_safe(info.elem_type)
 		}
 		.struct {
 			info := sym.info as ast.Struct
 			for field in info.fields {
-				if !g.is_c_init_safe_zero(field.typ) {
+				if !g.is_c_type_zero_init_safe(field.typ) {
 					return false
 				}
 			}
