@@ -636,6 +636,10 @@ fn (mut g Gen) is_c_static_init_safe(expr ast.Expr) bool {
 				return false
 			}
 			for field in expr.init_fields {
+				if field.expr is ast.StructInit {
+					return false
+				}
+
 				if !g.is_c_static_init_safe(field.expr) {
 					return false
 				}
