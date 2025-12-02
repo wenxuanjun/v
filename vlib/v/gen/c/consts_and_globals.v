@@ -644,6 +644,9 @@ fn (mut g Gen) is_c_static_init_safe(expr ast.Expr) bool {
 				return false
 			}
 			sym := g.table.final_sym(expr.typ)
+			if sym.name.starts_with('builtin.closure') {
+				return false
+			}
 			if sym.info is ast.Struct {
 				for field in sym.info.fields {
 					if expr.init_fields.any(it.name == field.name) {
