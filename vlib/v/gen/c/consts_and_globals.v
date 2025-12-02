@@ -515,7 +515,8 @@ fn (mut g Gen) global_decl(node ast.GlobalDecl) {
 				def_builder.write_string(' = ${g.expr_string(field.expr)}')
 			} else if (field.expr.is_literal() && should_init) || cinit
 				|| (field.expr is ast.ArrayInit && field.expr.is_fixed)
-				|| (is_simple_unsafe_expr && should_init) {
+				|| (is_simple_unsafe_expr && should_init)
+				|| (should_init && g.is_c_static_init_safe(field.expr)) {
 				// Simple literals can be initialized right away in global scope in C.
 				// e.g. `int myglobal = 10;`
 				def_builder.write_string(' = ${g.expr_string(field.expr)}')
