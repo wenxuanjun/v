@@ -1,0 +1,14 @@
+// vtest vflags: -no-builtin -no-preludes -gc none
+module main
+
+interface Holder {}
+
+fn maybe_ptr() ?voidptr {
+	return unsafe { nil }
+}
+
+fn main() {
+	vp := unsafe { nil }
+	_ = Holder(vp)
+	_ = maybe_ptr() or { unsafe { nil } }
+}

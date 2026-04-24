@@ -1,0 +1,4 @@
+typedef struct _option_void_ptr _option_void_ptr;
+static main__Holder I_voidptr_to_Interface_main__Holder(void** x);
+static inline main__Holder I_voidptr_to_Interface_main__Holder(void** x) {
+const u32 _main__Holder_voidptr_index = 1;

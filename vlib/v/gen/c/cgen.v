@@ -1607,9 +1607,7 @@ fn (mut g Gen) option_type_name(t ast.Type) (string, string) {
 	} else {
 		styp = '${option_name}_${base}'
 	}
-	if t.has_flag(.generic) || t.is_ptr() {
-		styp = styp.replace('*', '_ptr')
-	}
+	styp = c_identifier_fragment(styp)
 	return styp, base
 }
 
@@ -1717,9 +1715,7 @@ fn (mut g Gen) result_type_name(t ast.Type) (string, string) {
 	} else {
 		styp = '${result_name}_${base}'
 	}
-	if t.has_flag(.generic) || t.is_ptr() {
-		styp = styp.replace('*', '_ptr')
-	}
+	styp = c_identifier_fragment(styp)
 	return styp, base
 }
 
@@ -4432,7 +4428,7 @@ fn (mut g Gen) expr_with_array_element_upcast(expr ast.Expr, got_type ast.Type, 
 	g.indent++
 	if expected_elem_sym.kind == .interface {
 		expected_interface_info := expected_elem_sym.info as ast.Interface
-		mut fname := 'I_${g.cc_type(got_elem_type, true)}_to_Interface_${expected_elem_sym.cname}'
+		mut fname := 'I_${g.table.sym(got_elem_type).cname}_to_Interface_${expected_elem_sym.cname}'
 		lock g.referenced_fns {
 			g.referenced_fns[fname] = true
 		}
@@ -4535,12 +4531,13 @@ fn (mut g Gen) expr_with_cast(expr ast.Expr, got_type_raw ast.Type, expected_typ
 	}
 	if got_sym.info !is ast.Interface && exp_sym.info is ast.Interface
 		&& got_type.idx() != expected_type.idx() && !expected_type.has_flag(.result) {
+		got_variant_name := got_sym.cname
 		if expr is ast.StructInit && !got_type.is_ptr() {
 			g.inside_cast_in_heap++
 			got_styp := g.cc_type(got_type.ref(), true)
 			// TODO: why does cc_type even add this in the first place?
 			exp_styp := exp_sym.cname
-			mut fname := 'I_${got_styp}_to_Interface_${exp_styp}'
+			mut fname := 'I_${got_variant_name}_to_Interface_${exp_styp}'
 			if exp_sym.info.is_generic {
 				fname = g.generic_fn_name(exp_sym.info.concrete_types, fname)
 			}
@@ -4554,9 +4551,9 @@ fn (mut g Gen) expr_with_cast(expr ast.Expr, got_type_raw ast.Type, expected_typ
 			exp_styp := if got_is_shared { '__shared__${exp_sym.cname}' } else { exp_sym.cname }
 			// If it's shared, we need to use the other caster:
 			mut fname := if got_is_shared {
-				'I___shared__${got_styp}_to_shared_Interface_${exp_styp}'
+				'I___shared__${got_variant_name}_to_shared_Interface_${exp_styp}'
 			} else {
-				'I_${got_styp}_to_Interface_${exp_styp}'
+				'I_${got_variant_name}_to_Interface_${exp_styp}'
 			}
 			lock g.referenced_fns {
 				g.referenced_fns[fname] = true
@@ -11055,6 +11052,11 @@ fn c_name(name_ string) string {
 }
 
 @[inline]
+fn c_identifier_fragment(name string) string {
+	return util.no_dots(name).replace_each(ast.fn_type_escape_seq).replace('*', '_ptr')
+}
+
+@[inline]
 fn c_fn_name(name_ string) string {
 	name := util.no_dots(name_)
 	if c_reserved_chk.matches(name) {
@@ -11808,11 +11810,19 @@ fn (mut g Gen) interface_table() string {
 			// cctype is the Cleaned Concrete Type name, *without ptr*,
 			// i.e. cctype is always just Cat, not Cat_ptr:
 			cctype := g.cc_type(ast.mktyp(st), true)
+			variant_name := st_sym.cname
 			is_fn_variant := st_sym_info.info is ast.FnType
-			cctype2 := if g.pref.skip_unused && st_sym_info.idx !in g.table.used_features.used_syms {
+			use_voidptr_storage := g.pref.skip_unused
+				&& st_sym_info.idx !in g.table.used_features.used_syms
+			cctype2 := if use_voidptr_storage {
 				'voidptr'
 			} else {
 				cctype
+			}
+			field_name := if use_voidptr_storage {
+				'voidptr'
+			} else {
+				variant_name
 			}
 			param_decl := if cctype == cctype2 {
 				if is_fn_variant {
@@ -11829,16 +11839,16 @@ fn (mut g Gen) interface_table() string {
 			// Reserve interface type index 0 as an invalid/uninitialized sentinel.
 			// That keeps stray bytes from overlapping storage, like unions, from
 			// aliasing a valid concrete interface variant.
-			interface_index_name := '_${interface_name}_${cctype}_index'
+			interface_index_name := '_${interface_name}_${variant_name}_index'
 			if already_generated_mwrappers[interface_index_name] > 0 {
 				continue
 			}
 			already_generated_mwrappers[interface_index_name] = current_iinidx
 			current_iinidx++
-			sb.writeln('static ${interface_name} I_${cctype}_to_Interface_${interface_name}(${param_decl});')
+			sb.writeln('static ${interface_name} I_${variant_name}_to_Interface_${interface_name}(${param_decl});')
 			mut cast_struct := strings.new_builder(100)
 			cast_struct.writeln('(${interface_name}) {')
-			cast_struct.writeln('\t\t._${cctype2} = x,')
+			cast_struct.writeln('\t\t._${field_name} = x,')
 			cast_struct.writeln('\t\t._typ = ${interface_index_name},')
 			methods_ptr := if inter_methods.len > 0 {
 				'&${interface_name}_name_table[${interface_index_name}]'
@@ -11862,12 +11872,12 @@ fn (mut g Gen) interface_table() string {
 			}
 
 			cast_functions.writeln('
-static inline ${interface_name} I_${cctype}_to_Interface_${interface_name}(${param_decl}) {
+static inline ${interface_name} I_${variant_name}_to_Interface_${interface_name}(${param_decl}) {
 return ${cast_struct_str};
 }')
 			if cctype == cctype2 {
-				mut clone_fn_name := '__v_interface_clone_variant__${interface_name}__${cctype}'
-				mut cast_fn_name := 'I_${cctype}_to_Interface_${interface_name}'
+				mut clone_fn_name := '__v_interface_clone_variant__${interface_name}__${variant_name}'
+				mut cast_fn_name := 'I_${variant_name}_to_Interface_${interface_name}'
 				if inter_info.is_generic {
 					clone_fn_name = g.generic_fn_name(inter_info.concrete_types, clone_fn_name)
 					cast_fn_name = g.generic_fn_name(inter_info.concrete_types, cast_fn_name)
@@ -11900,14 +11910,14 @@ return ${clone_expr};
 				clone_cases.writeln('\t}')
 			}
 
-			shared_fn_name := 'I___shared__${cctype}_to_shared_Interface___shared__${interface_name}'
+			shared_fn_name := 'I___shared__${variant_name}_to_shared_Interface___shared__${interface_name}'
 			// Avoid undefined types errors by only generating the converters that are referenced:
 			if g.has_been_referenced(shared_fn_name) {
 				mut cast_shared_struct := strings.new_builder(100)
 				cast_shared_struct.writeln('(__shared__${interface_name}) {')
 				cast_shared_struct.writeln('\t\t.mtx = {0},')
 				cast_shared_struct.writeln('\t\t.val = {')
-				cast_shared_struct.writeln('\t\t\t._${cctype} = &x->val,')
+				cast_shared_struct.writeln('\t\t\t._${variant_name} = &x->val,')
 				cast_shared_struct.writeln('\t\t\t._typ = ${interface_index_name},')
 				cast_shared_struct.writeln('\t\t\t._methods = ${methods_ptr},')
 				cast_shared_struct.writeln('\t\t}')
@@ -11920,7 +11930,7 @@ return ${cast_shared_struct_str};
 }')
 				if shared_interface_mtx_helper_needed {
 					shared_interface_mtx_cases.writeln('\t\tcase ${interface_index_name}:')
-					shared_interface_mtx_cases.writeln('\t\t\treturn &(((__shared__${cctype}*)((char*)x->val._${cctype} - __offsetof(__shared__${cctype}, val)))->mtx);')
+					shared_interface_mtx_cases.writeln('\t\t\treturn &(((__shared__${cctype}*)((char*)x->val._${variant_name} - __offsetof(__shared__${cctype}, val)))->mtx);')
 				}
 			}
 

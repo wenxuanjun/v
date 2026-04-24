@@ -389,9 +389,7 @@ fn (mut g Generics) option_type_name(t ast.Type) (string, string) {
 	} else {
 		styp = '${option_name}_${base}'
 	}
-	if t.has_flag(.generic) || t.is_ptr() {
-		styp = styp.replace('*', '_ptr')
-	}
+	styp = styp.replace_each(ast.fn_type_escape_seq).replace('*', '_ptr')
 	return styp, base
 }
 
@@ -411,9 +409,7 @@ fn (mut g Generics) result_type_name(t ast.Type) (string, string) {
 	} else {
 		styp = '${result_name}_${base}'
 	}
-	if t.has_flag(.generic) || t.is_ptr() {
-		styp = styp.replace('*', '_ptr')
-	}
+	styp = styp.replace_each(ast.fn_type_escape_seq).replace('*', '_ptr')
 	return styp, base
 }
 
